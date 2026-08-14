@@ -24,7 +24,7 @@ public class IngestionServiceApp {
             if (csv == null) {
                 throw new IOException("intersections-legacy.csv not found on classpath");
             }
-            return new CscvCleaner().clean(csv);
+            return new CsvCleaner().clean(csv);
         }
     }
 }
