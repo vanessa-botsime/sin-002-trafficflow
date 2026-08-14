@@ -5,17 +5,23 @@ package co.wethinkcode.trafficflow;
  */
 public class IntersectionRecord {
 
-    public String id;
-    public Object district;
-    public Object signalType;
-    public Object active;
+    public final String id;
+    public final Object district;
+    public final Object signalType;
+    public final Object active;
 
     public IntersectionRecord(String id, String district, String signalType, Boolean active) {
-        //TODO Auto-generated constructor stub
+        this.id = id;
+        this.district = district;
+        this.signalType = signalType;
+        this.active = active;
     }
 
     public IntersectionRecord(String id2, Object district2, Object signalType2, Object active2) {
-        //TODO Auto-generated constructor stub
+        this.id = id2;
+        this.district = district2;
+        this.signalType = signalType2;
+        this.active = active2;
     }
 
 }
