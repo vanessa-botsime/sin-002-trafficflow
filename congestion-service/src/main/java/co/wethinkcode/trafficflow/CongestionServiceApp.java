@@ -30,7 +30,7 @@ public class CongestionServiceApp {
                 throw new BadRequestResponse("level must be between " + MIN_LEVEL + " and " + MAX_LEVEL);
             }
             congestionLevel.set(level);
-            
+            ctx.json(Map.of("level", congestionLevel.get()));
         });
 
     }
