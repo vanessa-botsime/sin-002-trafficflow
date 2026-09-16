@@ -5,22 +5,39 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
-
+import co.wethinkcode.trafficflow.mq.MqConfig;
+import org.apache.activemq.ActiveMQConnectionFactory;
+import javax.jms.Connection;
+import javax.jms.JMSException;
+import javax.jms.MessageConsumer;
+import javax.jms.Session;
+import javax.jms.TextMessage;
+import javax.jms.Topic;
 import io.javalin.Javalin;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.concurrent.atomic.AtomicInteger;
+
 
 public class RoutingServiceApp {
 
     private static final String INTERSECTION_SERVICE_URL = "http://localhost:7021";
-    private static final String CONGESTION_SERVICE_URL = "http://localhost:7022/congestion";
+
+
 
     private static final int BASE_MINUTES = 5;
     private static final int MINUTES_PER_CONGESTION_LEVEL = 2;
  
     private static final HttpClient client = HttpClient.newHttpClient();
     private static final ObjectMapper mapper = new ObjectMapper();
+
+    // Stage 3: kept up to date by subscribing to congestion-topic instead of
+    // polling GET /congestion on congestion-service per-request.
+    private static final AtomicInteger cachedCongestionLevel = new AtomicInteger(0);
+
     public static void main(String[] args) {
+        subscribeToCongestionUpdates();
+
         Javalin app = Javalin.create().start(7023);
 
         app.get("/health", ctx -> ctx.result("OK"));
@@ -43,12 +60,7 @@ public class RoutingServiceApp {
                 return;
             }
 
-            Integer congestionLevel = fetchCongestionLevel();
-            if (congestionLevel == null) {
-                ctx.status(502).json(Map.of("error", "Could not reach congestion-service"));
-                return;
-            }
-
+            int congestionLevel = cachedCongestionLevel.get();
             int estimatedMinutes = BASE_MINUTES + (congestionLevel * MINUTES_PER_CONGESTION_LEVEL);
 
             ctx.json(Map.of(
@@ -72,18 +84,31 @@ public class RoutingServiceApp {
         }
     }
 
-    private static Integer fetchCongestionLevel() {
+    private static void subscribeToCongestionUpdates() {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(CONGESTION_SERVICE_URL)).GET().build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) {
-                return null;
-            }
-            JsonNode node = mapper.readTree(response.body());
-            return node.get("level").asInt();
-        } catch (IOException | InterruptedException e) {
-            System.err.println("Could not reach congestion-service: " + e.getMessage());
-            return null;
+            ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(MqConfig.BROKER_URL);
+            Connection connection = factory.createConnection();
+            connection.start();
+            Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            Topic topic = session.createTopic(MqConfig.TOPIC);
+            MessageConsumer consumer = session.createConsumer(topic);
+ 
+            consumer.setMessageListener(message -> {
+                try {
+                    if (message instanceof TextMessage textMessage) {
+                        JsonNode node = mapper.readTree(textMessage.getText());
+                        cachedCongestionLevel.set(node.get("level").asInt());
+                        System.out.println("Received congestion update: level=" + cachedCongestionLevel.get());
+                    }
+                } catch (JMSException | IOException e) {
+                    System.err.println("Failed to process congestion update: " + e.getMessage());
+                }
+            });
+ 
+            System.out.println("Subscribed to " + MqConfig.TOPIC + " at " + MqConfig.BROKER_URL);
+        } catch (JMSException e) {
+            System.err.println("Could not connect to ActiveMQ broker at " + MqConfig.BROKER_URL
+                    + " - routing-service will use the default congestion level. Cause: " + e.getMessage());
         }
     }
 }
