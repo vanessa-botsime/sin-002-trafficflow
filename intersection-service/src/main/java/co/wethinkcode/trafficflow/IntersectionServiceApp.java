@@ -1,8 +1,5 @@
 package co.wethinkcode.trafficflow;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.javalin.Javalin;
-
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -11,14 +8,39 @@ import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import javax.jms.Connection;
+import javax.jms.JMSException;
+import javax.jms.MessageProducer;
+import javax.jms.Queue;
+import javax.jms.Session;
+import javax.jms.TextMessage;
+
+import org.apache.activemq.ActiveMQConnectionFactory;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import co.wethinkcode.trafficflow.mq.MqConfig;
+import io.javalin.Javalin;
 
 public class IntersectionServiceApp {
 
     private static final String INGESTION_URL = "http://localhost:7020/intersections";
+    private static final long HEARTBEAT_INTERVAL_SECONDS = 5;
+
+    private static Session mqSession;
+    private static MessageProducer heartbeatProducer;
+
+    
 
     public static void main(String[] args) {
         Map<String, IntersectionRecord> byId = new ConcurrentHashMap<>();
         loadFromIngestion(byId);
+        initHeartbeatMq();
+        startHeartbeat();
 
         Javalin app = Javalin.create().start(7021);
 
@@ -81,4 +103,38 @@ public class IntersectionServiceApp {
                     + " - starting intersection-service with an empty dataset. Cause: " + e.getMessage());
         }
     }
+
+    private static void initHeartbeatMq() {
+        try {
+            ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(MqConfig.BROKER_URL);
+            Connection connection = factory.createConnection();
+            connection.start();
+            mqSession = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            Queue queue = mqSession.createQueue(MqConfig.HEARTBEAT_QUEUE);
+            heartbeatProducer = mqSession.createProducer(queue);
+            System.out.println("Connected to ActiveMQ broker at " + MqConfig.BROKER_URL
+                    + " - sending heartbeats to " + MqConfig.HEARTBEAT_QUEUE);
+        } catch (JMSException e) {
+            System.err.println("Could not connect to ActiveMQ broker at " + MqConfig.BROKER_URL
+                    + " - heartbeats will not be sent. Cause: " + e.getMessage());
+        }
+    }
+
+    private static void startHeartbeat() {
+        if (heartbeatProducer == null) {
+            return;
+        }
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                TextMessage message = mqSession.createTextMessage(
+                        "{\"status\":\"alive\",\"timestamp\":" + System.currentTimeMillis() + "}");
+                heartbeatProducer.send(message);
+            } catch (JMSException e) {
+                System.err.println("Failed to send heartbeat: " + e.getMessage());
+            }
+        }, 0, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
+    }
+
+
 }
