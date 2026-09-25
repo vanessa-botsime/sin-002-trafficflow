@@ -1,0 +1,11 @@
+### Test 1: Fetch Ingested Raw Data
+GET http://localhost:7020/intersections
+
+###
+### Test 2: Trigger Dynamic Traffic Spike
+POST http://localhost:7022/congestion
+Content-Type: application/json
+
+{
+  "level": 5
+}
